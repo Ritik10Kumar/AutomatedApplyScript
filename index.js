@@ -14,11 +14,12 @@ const {
 } = process.env;
 
 const MAX_JOBS = 10;
-const LOCATION = "Gurgaon"; // Run one location at a time
+const LOCATION = "Gurgaon";
 
 (async () => {
   const browser = await puppeteer.launch({
     headless: false,
+    executablePath:'/usr/bin/google-chrome',
     defaultViewport: null,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
   });
@@ -26,29 +27,41 @@ const LOCATION = "Gurgaon"; // Run one location at a time
   const page = await browser.newPage();
   page.setDefaultNavigationTimeout(60000);
 
-  // Login
-  await page.goto("https://www.linkedin.com/login", { waitUntil: "domcontentloaded" });
+  // 1. Login
+  await page.goto("https://www.linkedin.com/login", { waitUntil: "load" , timeout: 90000 });
   await page.type("#username", LINKEDIN_EMAIL);
   await page.type("#password", LINKEDIN_PASSWORD);
   await page.click('button[type="submit"]');
-  await page.waitForNavigation({ waitUntil: "domcontentloaded" });
+  await page.waitForNavigation({ waitUntil: "load" , timeout: 90000 });
   console.log("✅ Logged in");
 
-  // Job search
+  // 2. Search Jobs
   const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=Node.js%20Developer&location=${LOCATION}&f_AL=true&f_E=3%2C4&f_TPR=r86400`;
-  await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
+  await page.goto(searchUrl, { waitUntil: "load" , timeout: 90000 });
   console.log("🌍 Searching jobs in:", LOCATION);
 
-  // Scroll to load jobs
-  for (let i = 0; i < 3; i++) {
+  // 3. Scroll to load more jobs
+  for (let i = 0; i < 5; i++) {
     await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+    // await page.waitForTimeout(1000);
     await new Promise(r => setTimeout(r, 1000));
   }
 
-  // Get job links
-  const jobLinks = await page.$$eval("a.job-card-list__title", links => links.map(link => link.href));
-  const appliedJobs = fs.existsSync("applied_jobs.txt") ? fs.readFileSync("applied_jobs.txt", "utf-8").split("\n") : [];
+  // 4. Get job links (only Node.js jobs, filtered)
+  const jobLinks = await page.$$eval('ul.jobs-search__results-list li a', links => {
+    const uniqueLinks = new Set();
+    links.forEach(link => {
+      const title = link.textContent?.toLowerCase() || "";
+      if (link.href.includes("/jobs/view/") && title.includes("node")) {
+        uniqueLinks.add(link.href.split("?")[0]);
+      }
+    });
+    return [...uniqueLinks];
+  });
 
+  console.log(`🔗 Found ${jobLinks.length} job(s).`);
+
+  const appliedJobs = fs.existsSync("applied_jobs.txt") ? fs.readFileSync("applied_jobs.txt", "utf-8").split("\n") : [];
   let count = 0;
 
   for (const link of jobLinks) {
@@ -56,11 +69,13 @@ const LOCATION = "Gurgaon"; // Run one location at a time
     if (appliedJobs.includes(link)) continue;
 
     try {
-      await page.goto(link, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await page.goto(link, { waitUntil: "load", timeout: 90000 });
+      await page.waitForSelector('button.jobs-apply-button, button.artdeco-button--primary', { visible: true, timeout: 90000 });
+      // const easyApplyBtn = await page.$('button.jobs-apply-button');
+      const easyApplyBtn = await page.$('button.jobs-apply-button, button.artdeco-button--primary');
 
-      const [applyBtn] = await page.$x("//button[contains(., 'Easy Apply')]");
-      if (applyBtn) {
-        await applyBtn.click();
+      if (easyApplyBtn) {
+        await easyApplyBtn.click();
         await page.waitForTimeout(1000);
 
         const emailInput = await page.$('input[name="email"]');
@@ -69,23 +84,25 @@ const LOCATION = "Gurgaon"; // Run one location at a time
         const phoneInput = await page.$('input[name="phoneNumber"]');
         if (phoneInput) await phoneInput.type(USER_PHONE);
 
-        // Upload resume 
         const fileInput = await page.$('input[type="file"]');
         if (fileInput) await fileInput.uploadFile(RESUME_PATH);
 
-        // Submit application
-        const [submitBtn] = await page.$x("//button[contains(., 'Submit application')]");
+        const submitBtn = await page.$('button[aria-label*="Submit application"]');
         if (submitBtn) {
           await submitBtn.click();
           console.log("✅ Applied to:", link);
 
-          // Save to file
+          // Save applied job
           const title = await page.$eval("h1", el => el.innerText).catch(() => "Unknown Title");
           const company = await page.$eval(".jobs-unified-top-card__company-name", el => el.innerText).catch(() => "Unknown Company");
           fs.appendFileSync("applied_jobs.txt", `${link}\n`);
           fs.appendFileSync("applied_log.txt", `${company} - ${title}\n`);
           count++;
+        } else {
+          console.log("⚠️ Couldn't find submit button on:", link);
         }
+      } else {
+        console.log("🚫 No Easy Apply button on:", link);
       }
     } catch (err) {
       console.log("❌ Skipped:", link, err.message);
@@ -99,239 +116,117 @@ const LOCATION = "Gurgaon"; // Run one location at a time
 
 
 
-// require("dotenv").config();
 // const puppeteer = require("puppeteer");
-// const path = require("path");
 // const fs = require("fs");
+// require("dotenv").config();
 
-// const LOCATIONS = ["Gurgaon", "Noida"];
-// const KEYWORD = "Node.js Developer";
-// const EXPERIENCE_FILTER = "f_E=3"; // Associate
-// const TIME_FILTER = "f_TP=1"; // Past 24 hours
-// const EASY_APPLY_FILTER = "f_AL=true";
+// const {
+//   LINKEDIN_EMAIL,
+//   LINKEDIN_PASSWORD,
+//   USER_EMAIL,
+//   USER_PHONE,
+//   USER_CTC,
+//   USER_EXPECTED_CTC,
+//   USER_NOTICE_PERIOD,
+//   RESUME_PATH,
+// } = process.env;
 
-// const appliedJobsFile = path.join(__dirname, "applied_jobs.txt");
-
-// async function fillIfExists(page, selector, value) {
-//   try {
-//     const input = await page.$(selector);
-//     if (input) {
-//       await input.click({ clickCount: 3 });
-//       await input.type(value);
-//       console.log(`✅ Filled: ${selector}`);
-//     }
-//   } catch (e) {
-//     console.log(`❌ Skipped (not found): ${selector}`);
-//   }
-// }
-
-// async function logApplication(page, jobLink) {
-//   const companyName = await page.$eval('.topcard__org-name-link, .topcard__flavor', el => el.innerText.trim()).catch(() => "Unknown Company");
-//   const jobTitle = await page.$eval('.top-card-layout__title', el => el.innerText.trim()).catch(() => "Unknown Title");
-
-//   // Read applied jobs file to check if job has already been applied
-//   const appliedJobs = fs.readFileSync(appliedJobsFile, "utf8").split("\n");
-  
-//   // If the job link is already in the file, skip it
-//   if (appliedJobs.some(job => job.includes(jobLink))) {
-//     console.log(`⚠️ Already applied to: ${companyName} - ${jobTitle}`);
-//     return; // Skip this job
-//   }
-
-//   const line = `${companyName} | ${jobTitle} | ${jobLink}\n`;
-//   fs.appendFileSync(appliedJobsFile, line, "utf8");
-//   console.log(`📝 Logged: ${companyName} - ${jobTitle}`);
-// }
+// const MAX_JOBS = 10;
+// const LOCATION = "Gurgaon"; // Run one location at a time
 
 // (async () => {
-// //   const browser = await puppeteer.launch({ headless: false, defaultViewport: null });
-// const browser = await puppeteer.launch({
+//   const browser = await puppeteer.launch({
 //     headless: false,
 //     defaultViewport: null,
-//     args: ['--no-sandbox', '--disable-setuid-sandbox'],
+//     args: ["--no-sandbox", "--disable-setuid-sandbox"],
 //   });
+
 //   const page = await browser.newPage();
+//   page.setDefaultNavigationTimeout(60000);
 
 //   // Login
-//   await page.goto("https://www.linkedin.com/login");
-//   await page.type("#username", process.env.LINKEDIN_EMAIL);
-//   await page.type("#password", process.env.LINKEDIN_PASSWORD);
+//   await page.goto("https://www.linkedin.com/login", { waitUntil: "domcontentloaded" });
+//   await page.type("#username", LINKEDIN_EMAIL);
+//   await page.type("#password", LINKEDIN_PASSWORD);
 //   await page.click('button[type="submit"]');
-//   await page.waitForNavigation();
+//   await page.waitForNavigation({ waitUntil: "domcontentloaded" });
 //   console.log("✅ Logged in");
 
-//   for (const location of LOCATIONS) {
-//     console.log(`🌍 Searching jobs in: ${location}`);
+//   // Job search
+//   const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=Node.js%20Developer&location=${LOCATION}&f_AL=true&f_E=3%2C4&f_TPR=r86400`;
+//   await page.goto(searchUrl, { waitUntil: "domcontentloaded" });
+//   console.log("🌍 Searching jobs in:", LOCATION);
 
-//     const searchURL = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(KEYWORD)}&location=${encodeURIComponent(location)}&${EASY_APPLY_FILTER}&${TIME_FILTER}&${EXPERIENCE_FILTER}`;
-//     // await page.goto(searchURL, { waitUntil: "networkidle2",timeout: 60000   });
-//     await page.goto(searchURL, { waitUntil: "domcontentloaded",timeout: 60000   });
+//   // Scroll to load jobs
+//   for (let i = 0; i < 8; i++) {
+//     await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+//     await new Promise(r => setTimeout(r, 1000));
+//     // await page.waitForTimeout(1000);
+//   }
 
-//     // Scroll to load jobs
-//     for (let i = 0; i < 30; i++) {
-//       await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-//       await page.waitForTimeout(1500);
+//   // Get job links
+//   // const jobLinks = await page.$$eval("a.job-card-list__title", links => links.map(link => link.href));
+//   await page.waitForSelector('ul.jobs-search__results-list li a', { timeout: 10000 });
+
+// const jobLinks = await page.$$eval('ul.jobs-search__results-list li a', links => {
+//   const uniqueLinks = new Set();
+//   links.forEach(link => {
+//     if (link.href && link.href.includes('/jobs/view/')) {
+//       uniqueLinks.add(link.href.split('?')[0]); // clean URL
 //     }
+//   });
+//   return [...uniqueLinks];
+// });
 
-//     const jobLinks = await page.$$eval('a.base-card__full-link', links =>
-//       links.map(link => link.href)
-//     );
+// console.log(`🔗 Found ${jobLinks.length} job(s).`);
+  
+//   const appliedJobs = fs.existsSync("applied_jobs.txt") ? fs.readFileSync("applied_jobs.txt", "utf-8").split("\n") : [];
 
-//     console.log(`🔗 Found ${jobLinks.length} jobs in ${location}`);
+//   let count = 0;
 
-//     for (const link of jobLinks) {
-//       try {
-//         await page.goto(link, { waitUntil: "networkidle2" });
-//         await page.waitForTimeout(3000);
+//   for (const link of jobLinks) {
+//     if (count >= MAX_JOBS) break;
+//     if (appliedJobs.includes(link)) continue;
 
-//         const easyApplyBtn = await page.$('button.jobs-apply-button');
-//         if (!easyApplyBtn) {
-//           console.log("⛔ No Easy Apply – skipping");
-//           continue;
-//         }
+//     try {
+//       await page.goto(link, { waitUntil: "domcontentloaded", timeout: 30000 });
 
-//         await easyApplyBtn.click();
-//         await page.waitForTimeout(2000);
+//       const [applyBtn] = await page.$x("//button[contains(., 'Easy Apply')]");
+//       if (applyBtn) {
+//         await applyBtn.click();
+//         await page.waitForTimeout(1000);
 
-//         // Fill form fields
-//         await fillIfExists(page, 'input[placeholder="Email address"]', process.env.USER_EMAIL);
-//         await fillIfExists(page, 'input[placeholder="Phone number"]', process.env.USER_PHONE);
-//         await fillIfExists(page, 'input[placeholder*="Current CTC"]', process.env.USER_CTC);
-//         await fillIfExists(page, 'input[placeholder*="Expected CTC"]', process.env.USER_EXPECTED_CTC);
-//         await fillIfExists(page, 'input[placeholder*="Notice"]', process.env.USER_NOTICE_PERIOD);
+//         const emailInput = await page.$('input[name="email"]');
+//         if (emailInput) await emailInput.type(USER_EMAIL);
 
-//         // Upload resume
+//         const phoneInput = await page.$('input[name="phoneNumber"]');
+//         if (phoneInput) await phoneInput.type(USER_PHONE);
+
+//         // Upload resume 
 //         const fileInput = await page.$('input[type="file"]');
-//         if (fileInput) {
-//           const filePath = path.resolve(__dirname, process.env.RESUME_PATH);
-//           await fileInput.uploadFile(filePath);
-//           console.log("📎 Resume uploaded");
-//         }
+//         if (fileInput) await fileInput.uploadFile(RESUME_PATH);
 
-//         const submitBtn = await page.$('button[aria-label="Submit application"]');
+//         // Submit application
+//         const [submitBtn] = await page.$x("//button[contains(., 'Submit application')]");
 //         if (submitBtn) {
 //           await submitBtn.click();
-//           await logApplication(page, link);
-//           console.log("✅ Application submitted!\n");
-//         } else {
-//           console.log("❗ Complex application – skipped");
-//           const discardBtn = await page.$('button[aria-label="Dismiss"]');
-//           if (discardBtn) await discardBtn.click();
-//         }
+//           console.log("✅ Applied to:", link);
 
-//         await page.waitForTimeout(3000);
-//       } catch (err) {
-//         console.log("⚠️ Error with job:", err.message);
+//           // Save to file
+//           const title = await page.$eval("h1", el => el.innerText).catch(() => "Unknown Title");
+//           const company = await page.$eval(".jobs-unified-top-card__company-name", el => el.innerText).catch(() => "Unknown Company");
+//           fs.appendFileSync("applied_jobs.txt", `${link}\n`);
+//           fs.appendFileSync("applied_log.txt", `${company} - ${title}\n`);
+//           count++;
+//         }
 //       }
+//     } catch (err) {
+//       console.log("❌ Skipped:", link, err.message);
+//       continue;
 //     }
 //   }
 
+//   console.log(`🎯 Applied to ${count} job(s).`);
 //   await browser.close();
 // })();
 
-
-
-
-//old script
-// require("dotenv").config();
-// const puppeteer = require("puppeteer");
-// const path = require("path");
-
-// const LOCATIONS = ["Gurgaon", "Noida"];
-// const KEYWORD = "Node.js Developer";
-// const EXPERIENCE_FILTER = "f_E=3"; // Associate
-// const TIME_FILTER = "f_TP=1"; // Past 24 hours
-// const EASY_APPLY_FILTER = "f_AL=true";
-
-// async function fillIfExists(page, selector, value) {
-//   try {
-//     const input = await page.$(selector);
-//     if (input) {
-//       await input.click({ clickCount: 3 });
-//       await input.type(value);
-//       console.log(`✅ Filled: ${selector}`);
-//     }
-//   } catch (e) {
-//     console.log(`❌ Skipped (not found): ${selector}`);
-//   }
-// }
-
-// (async () => {
-//   const browser = await puppeteer.launch({ headless: false, defaultViewport: null });
-//   const page = await browser.newPage();
-
-//   // Login
-//   await page.goto("https://www.linkedin.com/login");
-//   await page.type("#username", process.env.LINKEDIN_EMAIL);
-//   await page.type("#password", process.env.LINKEDIN_PASSWORD);
-//   await page.click('button[type="submit"]');
-//   await page.waitForNavigation();
-//   console.log("✅ Logged in");
-
-//   for (const location of LOCATIONS) {
-//     console.log(`🌍 Searching jobs in: ${location}`);
-
-//     const searchURL = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(KEYWORD)}&location=${encodeURIComponent(location)}&${EASY_APPLY_FILTER}&${TIME_FILTER}&${EXPERIENCE_FILTER}`;
-
-//     await page.goto(searchURL, { waitUntil: "networkidle2" });
-
-//     // Scroll to load jobs
-//     for (let i = 0; i < 5; i++) {
-//       await page.evaluate(() => window.scrollBy(0, window.innerHeight));
-//       await page.waitForTimeout(1500);
-//     }
-
-//     const jobLinks = await page.$$eval('a.base-card__full-link', links =>
-//       links.map(link => link.href)
-//     );
-
-//     console.log(`🔗 Found ${jobLinks.length} jobs in ${location}`);
-
-//     for (const link of jobLinks) {
-//       try {
-//         await page.goto(link, { waitUntil: "networkidle2" });
-//         await page.waitForTimeout(3000);
-
-//         const easyApplyBtn = await page.$('button.jobs-apply-button');
-//         if (!easyApplyBtn) {
-//           console.log("⛔ No Easy Apply – skipping");
-//           continue;
-//         }
-
-//         await easyApplyBtn.click();
-//         await page.waitForTimeout(2000);
-
-//         // Fill form fields
-//         await fillIfExists(page, 'input[placeholder="Email address"]', process.env.USER_EMAIL);
-//         await fillIfExists(page, 'input[placeholder="Phone number"]', process.env.USER_PHONE);
-//         await fillIfExists(page, 'input[placeholder*="Current CTC"]', process.env.USER_CTC);
-//         await fillIfExists(page, 'input[placeholder*="Expected CTC"]', process.env.USER_EXPECTED_CTC);
-//         await fillIfExists(page, 'input[placeholder*="Notice"]', process.env.USER_NOTICE_PERIOD);
-
-//         // Upload resume
-//         const fileInput = await page.$('input[type="file"]');
-//         if (fileInput) {
-//           const filePath = path.resolve(__dirname, process.env.RESUME_PATH);
-//           await fileInput.uploadFile(filePath);
-//           console.log("📎 Resume uploaded");
-//         }
-
-//         const submitBtn = await page.$('button[aria-label="Submit application"]');
-//         if (submitBtn) {
-//           await submitBtn.click();
-//           console.log("✅ Application submitted!\n");
-//         } else {
-//           console.log("❗ Complex application – skipped");
-//           const discardBtn = await page.$('button[aria-label="Dismiss"]');
-//           if (discardBtn) await discardBtn.click();
-//         }
-
-//         await page.waitForTimeout(3000);
-//       } catch (err) {
-//         console.log("⚠️ Error with job:", err.message);
-//       }
-//     }
-//   }
-
-//   await browser.close();
-// })();
