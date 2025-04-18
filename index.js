@@ -69,7 +69,7 @@ const LOCATION = "Gurgaon"; // Run one location at a time
         const phoneInput = await page.$('input[name="phoneNumber"]');
         if (phoneInput) await phoneInput.type(USER_PHONE);
 
-        // Upload resume
+        // Upload resume 
         const fileInput = await page.$('input[type="file"]');
         if (fileInput) await fileInput.uploadFile(RESUME_PATH);
 
